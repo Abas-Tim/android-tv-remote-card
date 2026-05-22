@@ -79,6 +79,8 @@ custom_buttons:
     activity: com.plexapp.android
   - icon: mdi:skip-next
     command: MEDIA_NEXT
+  - icon: mdi:lightning-bolt
+    script: script.tv_night_mode
 ```
 
 ## Custom Buttons
@@ -89,7 +91,8 @@ Each button in `custom_buttons` requires an `icon` (any [MDI icon](https://picto
 |------------|-------------|----------|
 | `activity` | `remote.turn_on` | Launch an app by package name |
 | `command` | `remote.send_command` | Send a key code (e.g. `MEDIA_NEXT`, `MUTE`) |
-| `adb_command` | `android-tv.adb_command` | Raw ADB shell command (requires ADB connected) |
+| `adb_command` | `androidtv.adb_command` | Raw ADB shell command (requires ADB connected) |
+| `script` | `script.turn_on` | Run any Home Assistant script |
 
 ### Finding app package names
 
