@@ -411,7 +411,8 @@ class AndroidTVRemoteCard extends HTMLElement {
               if (btn.activity != null)       attrs = `data-activity="${esc(btn.activity)}"`;
               else if (btn.adb_command != null) attrs = `data-command="${esc(btn.adb_command)}" data-adb`;
               else if (btn.command != null)    attrs = `data-command="${esc(btn.command)}"`;
-              else if (btn.script != null)     attrs = `data-script="${esc(btn.script)}"`;
+              else if (btn.script != null)      attrs = `data-script="${esc(btn.script)}"`;
+              else if (btn.automation != null)  attrs = `data-automation="${esc(btn.automation)}"`;
               return `<div class="ui-button custom-btn" ${attrs}><ha-icon icon="${icon}"></ha-icon></div>`;
             }).join('')}
           </div>
@@ -478,6 +479,8 @@ class AndroidTVRemoteCard extends HTMLElement {
           this._sendRemoteCommand(btn.dataset.command);
         } else if (btn.dataset.script) {
           this._runScript(btn.dataset.script);
+        } else if (btn.dataset.automation) {
+          this._triggerAutomation(btn.dataset.automation);
         }
       });
     });
@@ -561,6 +564,10 @@ class AndroidTVRemoteCard extends HTMLElement {
 
   _runScript(entityId) {
     this._hass?.callService('script', 'turn_on', { entity_id: entityId });
+  }
+
+  _triggerAutomation(entityId) {
+    this._hass?.callService('automation', 'trigger', { entity_id: entityId });
   }
 
   _sendDpad(direction) {

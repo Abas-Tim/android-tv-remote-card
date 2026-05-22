@@ -81,6 +81,8 @@ custom_buttons:
     command: MEDIA_NEXT
   - icon: mdi:lightning-bolt
     script: script.tv_night_mode
+  - icon: mdi:play-circle
+    automation: automation.tv_welcome_scene
 ```
 
 ## Custom Buttons
@@ -93,6 +95,7 @@ Each button in `custom_buttons` requires an `icon` (any [MDI icon](https://picto
 | `command` | `remote.send_command` | Send a key code (e.g. `MEDIA_NEXT`, `MUTE`) |
 | `adb_command` | `androidtv.adb_command` | Raw ADB shell command (requires ADB connected) |
 | `script` | `script.turn_on` | Run any Home Assistant script |
+| `automation` | `automation.trigger` | Trigger any Home Assistant automation |
 
 ### Finding app package names
 
