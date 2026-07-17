@@ -30,9 +30,9 @@ A Home Assistant Lovelace card for controlling Android TV devices, featuring a t
 
 ### Manual
 
-1. Copy `android-tv-remote-card.js` to `/config/www/android-tv-remote-card/android-tv-remote-card.js` on your HA instance
+1. Copy `androidtv-remote-card.js` to `/config/www/androidtv-remote-card/androidtv-remote-card.js` on your HA instance
 2. Go to **Settings → Dashboards → ⋮ → Resources → Add resource**
-   - URL: `/local/android-tv-remote-card/android-tv-remote-card.js`
+   - URL: `/local/androidtv-remote-card/androidtv-remote-card.js`
    - Type: `JavaScript module`
 3. Hard-refresh your browser (`Ctrl+Shift+R` / `Cmd+Shift+R`)
 
@@ -45,7 +45,7 @@ Add this repository as a custom repository in HACS under **Frontend**.
 Add the card via **Edit Dashboard → Add Card → Manual**:
 
 ```yaml
-type: custom:android-tv-remote-card
+type: custom:androidtv-remote-card
 entity: media_player.living_room_tv
 ```
 
@@ -65,7 +65,7 @@ entity: media_player.living_room_tv
 ### Full example
 
 ```yaml
-type: custom:android-tv-remote-card
+type: custom:androidtv-remote-card
 entity: media_player.living_room_tv
 remote_entity: remote.living_room_tv
 name: Living Room

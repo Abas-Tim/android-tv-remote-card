@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:hacs.xyz)",
+      "Bash(mkdir -p /Users/henri/GIT/androidtv-remote-card/.github/workflows)"
+    ],
+    "additionalDirectories": [
+      "/Users/henri/GIT/androidtv-remote-card/.github"
+    ]
+  }
+}
