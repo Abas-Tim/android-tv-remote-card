@@ -18,6 +18,7 @@ A Home Assistant Lovelace card for controlling Android TV devices, featuring a t
 ## Features
 
 - **Trackpad** — drag to navigate, tap to select (OK)
+- **Trackpad long press** — optionally hold to keep OK pressed until release
 - **Speed scaling** — fire rate increases the further you drag
 - **Haptic feedback** — vibrates on mobile when supported
 - **Power** — toggles TV on/off based on current state
@@ -38,7 +39,7 @@ A Home Assistant Lovelace card for controlling Android TV devices, featuring a t
 
 ### HACS
 
-Add this repository as a custom repository in HACS under **Frontend**.
+In HACS, open **Dashboard** → **⋮** → **Custom repositories**. Add your fork's GitHub URL and choose **Dashboard**, then download the card and refresh Home Assistant.
 
 ## Configuration
 
@@ -60,7 +61,11 @@ entity: media_player.living_room_tv
 | `hide_title` | boolean | No | Hide the title bar entirely (default `false`) |
 | `max_volume` | number | No | Maximum volume percentage the slider can reach (default `100`) |
 | `height` | number | No | Card height in pixels. Defaults to auto (aspect-ratio based) |
+| `trackpad_long_press` | boolean | No | Enable press-and-hold on the trackpad (default `false`) |
+| `trackpad_long_press_delay` | number | No | Milliseconds to hold before long press starts (default `500`) |
 | `custom_buttons` | list | No | Additional buttons rendered below the main controls |
+
+When trackpad long press is enabled, a stationary hold sends `start_long:DPAD_CENTER` after the configured delay and `end_long:DPAD_CENTER` on release. Moving beyond the joystick dead zone cancels a pending long press and continues normal navigation.
 
 ### Full example
 
@@ -70,6 +75,8 @@ entity: media_player.living_room_tv
 remote_entity: remote.living_room_tv
 name: Living Room
 volume_entity: media_player.sonos_beam
+trackpad_long_press: true
+trackpad_long_press_delay: 500
 custom_buttons:
   - icon: mdi:youtube
     activity: com.google.android.youtube.tv
@@ -79,6 +86,8 @@ custom_buttons:
     activity: com.plexapp.android
   - icon: mdi:skip-next
     command: MEDIA_NEXT
+  - icon: mdi:menu
+    command: MENU
   - icon: mdi:lightning-bolt
     script: script.tv_night_mode
   - icon: mdi:play-circle

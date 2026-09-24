@@ -192,10 +192,16 @@ const STYLES = `
 `;
 
 class Remote {
-  constructor(container, trackpad, trackpadBall) {
+  constructor(container, trackpad, trackpadBall, config = {}) {
     this.container = container;
     this.trackpad = trackpad;
     this.trackpadBall = trackpadBall;
+
+    this.trackpadLongPress = config.trackpad_long_press === true;
+    const configuredLongPressDelay = Number(config.trackpad_long_press_delay ?? 500);
+    this.trackpadLongPressDelay = Number.isFinite(configuredLongPressDelay)
+      ? Math.max(0, configuredLongPressDelay)
+      : 500;
 
     this.isMoving = false;
     this.pollSteps = 3;
@@ -207,105 +213,216 @@ class Remote {
     this.fireEventStarted = false;
     this.fireEventTimeout = null;
     this.moveDirection = null;
+    this.longPressTimer = null;
+    this.longPressActive = false;
+    this.gestureResetTimeout = null;
+    this.clickTimeout = null;
+    this.activeGesture = null;
+    this.destroyed = false;
 
     this.events = {
-      click: 'click',
       down: 'mousedown',
       move: 'mousemove',
       up: 'mouseup',
+      cancel: null,
     };
 
     if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
       this.events.down = 'touchstart';
       this.events.move = 'touchmove';
       this.events.up = 'touchend';
+      this.events.cancel = 'touchcancel';
     }
 
     this.bindEvents();
   }
 
   bindEvents() {
-    this.trackpad.addEventListener(this.events.click, (event) => {
+    // A tap is handled on release, so a browser-generated click must not
+    // trigger a second selection after a long press or drag.
+    this.trackpad.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (this.isMoving) return;
+    });
+
+    this.trackpad.addEventListener(this.events.down, (event) => this._startGesture(event));
+  }
+
+  _eventPoint(event) {
+    const touch = event.touches?.[0] ?? event.changedTouches?.[0];
+    const x = event.pageX ?? touch?.pageX;
+    const y = event.pageY ?? touch?.pageY;
+    return x == null || y == null ? null : { x, y };
+  }
+
+  _startGesture(event) {
+    if (this.destroyed || this.activeGesture) return;
+    if (event.button != null && event.button !== 0) return;
+
+    const point = this._eventPoint(event);
+    if (!point) return;
+
+    clearTimeout(this.gestureResetTimeout);
+    this.gestureResetTimeout = null;
+    this.isMoving = false;
+    this.trackpadBall.classList.remove('finished');
+
+    const { width: ballSize } = this.trackpadBall.getBoundingClientRect();
+    const rect = this.trackpad.getBoundingClientRect();
+    const gesture = {
+      startX: point.x,
+      startY: point.y,
+      maxX: rect.width / 2 - ballSize / 2 - 20,
+      maxY: rect.height / 2 - ballSize / 2 - 20,
+      moved: false,
+      startFireRate: null,
+      inputType: event.type === 'touchstart' ? 'touch' : 'mouse',
+      onMove: null,
+      onUp: null,
+      onCancel: null,
+      onPointerCancel: null,
+    };
+    this.activeGesture = gesture;
+
+    if (this.trackpadLongPress) {
+      this.longPressTimer = setTimeout(() => {
+        this.longPressTimer = null;
+        if (this.activeGesture !== gesture || gesture.moved) return;
+
+        this.longPressActive = true;
+        this.vibrate('medium');
+        this.container.dispatchEvent(new CustomEvent('long-press-start'));
+      }, this.trackpadLongPressDelay);
+    }
+
+    gesture.onMove = (moveEvent) => {
+      if (this.activeGesture !== gesture) return;
+      moveEvent.preventDefault();
+      moveEvent.stopImmediatePropagation();
+
+      // Once the held key has started, movement is ignored until release.
+      if (this.longPressActive) return;
+
+      const movePoint = this._eventPoint(moveEvent);
+      if (!movePoint) return;
+
+      const rawDeltaX = movePoint.x - gesture.startX;
+      const rawDeltaY = movePoint.y - gesture.startY;
+      const deltaX = Math.max(-gesture.maxX, Math.min(gesture.maxX, rawDeltaX * this.moveMultiplier));
+      const deltaY = Math.max(-gesture.maxY, Math.min(gesture.maxY, rawDeltaY * this.moveMultiplier));
+
+      const absXPercent = Math.abs(deltaX) / gesture.maxX;
+      const absYPercent = Math.abs(deltaY) / gesture.maxY;
+      const outsideDeadZone = absXPercent > this.deadZone || absYPercent > this.deadZone;
+
+      if (outsideDeadZone) {
+        gesture.moved = true;
+        clearTimeout(this.longPressTimer);
+        this.longPressTimer = null;
+        this.isMoving = true;
+      }
+
+      if (this.isMoving) {
+        const newDirection = absYPercent > absXPercent
+          ? (deltaY > 0 ? 'down' : 'up')
+          : (deltaX > 0 ? 'right' : 'left');
+
+        this.moveDistance = absYPercent > absXPercent ? absYPercent : absXPercent;
+
+        if (newDirection !== this.moveDirection || this.currentFireRate !== gesture.startFireRate) {
+          this.moveDirection = newDirection;
+          clearTimeout(this.fireEventTimeout);
+          this.fireEventStarted = false;
+        }
+        gesture.startFireRate = this.currentFireRate;
+
+        if (!this.fireEventStarted && outsideDeadZone) {
+          this.trackpadBall.classList.add('moving');
+          this.fireEvent();
+        }
+
+        this.trackpadBall.style.marginTop = `${deltaY}px`;
+        this.trackpadBall.style.marginLeft = `${deltaX}px`;
+      }
+    };
+
+    gesture.onUp = () => this._finishGesture(gesture);
+    gesture.onCancel = () => this._finishGesture(gesture);
+    gesture.onPointerCancel = (cancelEvent) => {
+      const matchesGesture = gesture.inputType === 'touch'
+        ? cancelEvent.pointerType === 'touch' || cancelEvent.pointerType === 'pen'
+        : cancelEvent.pointerType === 'mouse';
+      if (matchesGesture) this._finishGesture(gesture);
+    };
+
+    document.addEventListener(this.events.move, gesture.onMove);
+    document.addEventListener(this.events.up, gesture.onUp);
+    if (this.events.cancel) document.addEventListener(this.events.cancel, gesture.onCancel);
+    document.addEventListener('pointercancel', gesture.onPointerCancel);
+  }
+
+  _finishGesture(gesture, { allowTap = true, animate = true } = {}) {
+    if (this.activeGesture !== gesture) return;
+
+    this.activeGesture = null;
+    clearTimeout(this.longPressTimer);
+    this.longPressTimer = null;
+    clearTimeout(this.fireEventTimeout);
+    this.fireEventTimeout = null;
+    this.fireEventStarted = false;
+
+    document.removeEventListener(this.events.move, gesture.onMove);
+    document.removeEventListener(this.events.up, gesture.onUp);
+    if (this.events.cancel) document.removeEventListener(this.events.cancel, gesture.onCancel);
+    document.removeEventListener('pointercancel', gesture.onPointerCancel);
+
+    if (this.longPressActive) {
+      this.longPressActive = false;
+      this.container.dispatchEvent(new CustomEvent('long-press-end'));
+    } else if (allowTap && !gesture.moved) {
       this.trackpad.classList.add('clicked');
       this.vibrate('light');
       this.container.dispatchEvent(new CustomEvent('center'));
-      setTimeout(() => this.trackpad.classList.remove('clicked'), 30);
-    });
+      clearTimeout(this.clickTimeout);
+      this.clickTimeout = setTimeout(() => this.trackpad.classList.remove('clicked'), 30);
+    }
 
-    this.trackpad.addEventListener(this.events.down, (event) => {
+    this.trackpadBall.style.marginTop = '0px';
+    this.trackpadBall.style.marginLeft = '0px';
+    this.trackpadBall.classList.remove('moving');
+    clearTimeout(this.gestureResetTimeout);
+
+    if (animate) {
+      this.trackpadBall.classList.add('finished');
+      this.gestureResetTimeout = setTimeout(() => {
+        this.trackpadBall.classList.remove('finished');
+        this.isMoving = false;
+        this.gestureResetTimeout = null;
+      }, 300);
+    } else {
       this.trackpadBall.classList.remove('finished');
+      this.isMoving = false;
+      this.gestureResetTimeout = null;
+    }
+  }
 
-      const startX = event.pageX ?? event.touches[0].pageX;
-      const startY = event.pageY ?? event.touches[0].pageY;
-      const { width: ballSize } = this.trackpadBall.getBoundingClientRect();
-      const rect = this.trackpad.getBoundingClientRect();
-      const maxX = rect.width / 2 - ballSize / 2 - 20;
-      const maxY = rect.height / 2 - ballSize / 2 - 20;
-      let startFireRate = null;
+  destroy() {
+    this.destroyed = true;
+    if (this.activeGesture) {
+      this._finishGesture(this.activeGesture, { allowTap: false, animate: false });
+    }
 
-      const onMove = (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-
-        const rawDeltaX = (event.pageX ?? event.touches[0].pageX) - startX;
-        const rawDeltaY = (event.pageY ?? event.touches[0].pageY) - startY;
-        const deltaX = Math.max(-maxX, Math.min(maxX, rawDeltaX * this.moveMultiplier));
-        const deltaY = Math.max(-maxY, Math.min(maxY, rawDeltaY * this.moveMultiplier));
-
-        const absXPercent = Math.abs(deltaX) / maxX;
-        const absYPercent = Math.abs(deltaY) / maxY;
-
-        if (absXPercent > this.deadZone || absYPercent > this.deadZone) {
-          this.isMoving = true;
-        }
-
-        if (this.isMoving) {
-          const newDirection = absYPercent > absXPercent
-            ? (deltaY > 0 ? 'down' : 'up')
-            : (deltaX > 0 ? 'right' : 'left');
-
-          this.moveDistance = absYPercent > absXPercent ? absYPercent : absXPercent;
-
-          if (newDirection !== this.moveDirection || this.currentFireRate !== startFireRate) {
-            this.moveDirection = newDirection;
-            clearTimeout(this.fireEventTimeout);
-            this.fireEventStarted = false;
-          }
-          startFireRate = this.currentFireRate;
-
-          if (!this.fireEventStarted && (absYPercent > this.deadZone || absXPercent > this.deadZone)) {
-            this.trackpadBall.classList.add('moving');
-            this.fireEvent();
-          }
-
-          this.trackpadBall.style.marginTop = `${deltaY}px`;
-          this.trackpadBall.style.marginLeft = `${deltaX}px`;
-        }
-      };
-
-      const onUp = () => {
-        this.trackpadBall.style.marginTop = '0px';
-        this.trackpadBall.style.marginLeft = '0px';
-        this.trackpadBall.classList.remove('moving');
-        this.trackpadBall.classList.add('finished');
-        clearTimeout(this.fireEventTimeout);
-        this.fireEventStarted = false;
-
-        setTimeout(() => {
-          this.trackpadBall.classList.remove('finished');
-          this.isMoving = false;
-        }, 300);
-
-        document.removeEventListener(this.events.move, onMove);
-        document.removeEventListener(this.events.up, onUp);
-      };
-
-      document.addEventListener(this.events.move, onMove);
-      document.addEventListener(this.events.up, onUp);
-    });
+    clearTimeout(this.longPressTimer);
+    clearTimeout(this.fireEventTimeout);
+    clearTimeout(this.gestureResetTimeout);
+    clearTimeout(this.clickTimeout);
+    this.longPressTimer = null;
+    this.fireEventTimeout = null;
+    this.gestureResetTimeout = null;
+    this.clickTimeout = null;
+    this.longPressActive = false;
+    this.fireEventStarted = false;
+    this.isMoving = false;
   }
 
   fireEvent() {
@@ -350,13 +467,27 @@ class AndroidTVRemoteCard extends HTMLElement {
 
   setConfig(config) {
     if (!config.entity) throw new Error('androidtv-remote-card: entity is required');
+    this._disposeRemote();
     this._config = config;
     this._render();
+  }
+
+  connectedCallback() {
+    if (this._config && !this._remote) this._render();
+  }
+
+  disconnectedCallback() {
+    this._disposeRemote();
   }
 
   set hass(hass) {
     this._hass = hass;
     if (this._config) this._updateState();
+  }
+
+  _disposeRemote() {
+    this._remote?.destroy();
+    this._remote = null;
   }
 
   _render() {
@@ -432,11 +563,14 @@ class AndroidTVRemoteCard extends HTMLElement {
       container,
       root.querySelector('.trackpad'),
       root.querySelector('.trackpad__ball'),
+      this._config,
     );
     this._remote = remote;
 
     container.addEventListener('move', ({ detail }) => this._sendDpad(detail.direction));
     container.addEventListener('center', () => this._sendRemoteCommand('DPAD_CENTER'));
+    container.addEventListener('long-press-start', () => this._sendRemoteCommand('start_long:DPAD_CENTER'));
+    container.addEventListener('long-press-end', () => this._sendRemoteCommand('end_long:DPAD_CENTER'));
   }
 
   _bindButtons() {
@@ -666,6 +800,8 @@ const EDITOR_SCHEMA = [
   { name: 'hide_title',                     label: 'Hide title',                         selector: { boolean: {} } },
   { name: 'max_volume',                     label: 'Max volume %',                       selector: { number: { min: 1, max: 100, step: 1,   mode: 'box' } } },
   { name: 'height',                         label: 'Card height (px)',                   selector: { number: { min: 200, max: 1200, step: 10, mode: 'box' } } },
+  { name: 'trackpad_long_press',             label: 'Trackpad long press',                 selector: { boolean: {} } },
+  { name: 'trackpad_long_press_delay',       label: 'Long press delay (ms)',               selector: { number: { min: 0, max: 10000, step: 50, mode: 'box' } } },
 ];
 
 class AndroidTVRemoteCardEditor extends HTMLElement {
@@ -692,7 +828,11 @@ class AndroidTVRemoteCardEditor extends HTMLElement {
 
     const form = document.createElement('ha-form');
     form.hass = this._hass;
-    form.data = this._config ?? {};
+    form.data = {
+      trackpad_long_press: false,
+      trackpad_long_press_delay: 500,
+      ...this._config,
+    };
     form.schema = EDITOR_SCHEMA;
     form.computeLabel = (s) => s.label ?? s.name;
     form.addEventListener('value-changed', (e) => {
