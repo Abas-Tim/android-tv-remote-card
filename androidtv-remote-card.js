@@ -567,10 +567,18 @@ class AndroidTVRemoteCard extends HTMLElement {
     );
     this._remote = remote;
 
-    container.addEventListener('move', ({ detail }) => this._sendDpad(detail.direction));
-    container.addEventListener('center', () => this._sendRemoteCommand('DPAD_CENTER'));
-    container.addEventListener('long-press-start', () => this._sendRemoteCommand('start_long:DPAD_CENTER'));
-    container.addEventListener('long-press-end', () => this._sendRemoteCommand('end_long:DPAD_CENTER'));
+    container.addEventListener('move', ({ detail }) => {
+      if (!this._isTvOff()) this._sendDpad(detail.direction);
+    });
+    container.addEventListener('center', () => {
+      if (!this._isTvOff()) this._sendRemoteCommand('DPAD_CENTER');
+    });
+    container.addEventListener('long-press-start', () => {
+      if (!this._isTvOff()) this._sendRemoteCommand('start_long:DPAD_CENTER');
+    });
+    container.addEventListener('long-press-end', () => {
+      if (!this._isTvOff()) this._sendRemoteCommand('end_long:DPAD_CENTER');
+    });
   }
 
   _bindButtons() {
@@ -668,6 +676,11 @@ class AndroidTVRemoteCard extends HTMLElement {
   _remoteEntity() {
     return this._config.remote_entity
       ?? this._config.entity.replace(/^media_player\./, 'remote.');
+  }
+
+  _isTvOff() {
+    const state = this._hass?.states?.[this._config.entity]?.state;
+    return state === 'off' || state === 'unavailable';
   }
 
   _sendRemoteCommand(command) {
