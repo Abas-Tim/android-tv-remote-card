@@ -3,6 +3,7 @@ const VOLUME_ROLLER_ROW_HEIGHT = 32;
 const VOLUME_PANEL_CLOSE_DELAY = 30000;
 const VOLUME_STATE_SYNC_GRACE_PERIOD = 10000;
 const DEFAULT_VOLUME_PERCENT = 50;
+const TRACKPAD_REPEAT_DELAY = 400;
 
 function forwardHaptic(element, type) {
   element.dispatchEvent(new CustomEvent('haptic', {
@@ -148,10 +149,6 @@ const STYLES = `
   .volume-panel.open {
     display: flex;
   }
-  .volume-panel .ui-button {
-    --remote-button-size: 3rem;
-    flex-shrink: 0;
-  }
   .volume-roller {
     position: relative;
     flex: 1;
@@ -235,12 +232,9 @@ class Remote {
       : 500;
 
     this.isMoving = false;
-    this.pollSteps = 3;
-    this.moveDistance = 0;
     this.moveMultiplier = 1;
     this.deadZone = 0.1;
-    this.fireRate = 750;
-    this.currentFireRate = 750;
+    this.moveRepeatDelay = TRACKPAD_REPEAT_DELAY;
     this.fireEventStarted = false;
     this.fireEventTimeout = null;
     this.moveDirection = null;
@@ -306,7 +300,6 @@ class Remote {
       maxX: rect.width / 2 - ballSize / 2 - 20,
       maxY: rect.height / 2 - ballSize / 2 - 20,
       moved: false,
-      startFireRate: null,
       inputType: event.type === 'touchstart' ? 'touch' : 'mouse',
       onMove: null,
       onUp: null,
@@ -351,6 +344,13 @@ class Remote {
         clearTimeout(this.longPressTimer);
         this.longPressTimer = null;
         this.isMoving = true;
+      } else {
+        this.isMoving = false;
+        this.moveDirection = null;
+        this.fireEventStarted = false;
+        clearTimeout(this.fireEventTimeout);
+        this.fireEventTimeout = null;
+        this.trackpadBall.classList.remove('moving');
       }
 
       if (this.isMoving) {
@@ -358,14 +358,11 @@ class Remote {
           ? (deltaY > 0 ? 'down' : 'up')
           : (deltaX > 0 ? 'right' : 'left');
 
-        this.moveDistance = absYPercent > absXPercent ? absYPercent : absXPercent;
-
-        if (newDirection !== this.moveDirection || this.currentFireRate !== gesture.startFireRate) {
+        if (newDirection !== this.moveDirection) {
           this.moveDirection = newDirection;
           clearTimeout(this.fireEventTimeout);
           this.fireEventStarted = false;
         }
-        gesture.startFireRate = this.currentFireRate;
 
         if (!this.fireEventStarted && outsideDeadZone) {
           this.trackpadBall.classList.add('moving');
@@ -460,28 +457,15 @@ class Remote {
     this.fireEventStarted = true;
     this.vibrate();
 
-    const stepSize = 1 / this.pollSteps;
-    for (let i = 0; i < this.pollSteps; i++) {
-      if (this.moveDistance <= (i + 1) * stepSize) {
-        this.currentFireRate = this.fireRate / this.pollSteps * (this.pollSteps - i);
-        break;
-      }
-    }
-
-    if (this.moveDistance > 0.95) {
-      this.currentFireRate = 60;
-    }
-
     this.container.dispatchEvent(new CustomEvent('move', {
       detail: {
         direction: this.moveDirection,
-        distance: Math.round(this.moveDistance * 100),
       },
     }));
 
     this.fireEventTimeout = setTimeout(() => {
       if (this.isMoving) this.fireEvent();
-    }, this.currentFireRate);
+    }, this.moveRepeatDelay);
   }
 
   vibrate(type = 'selection') {
@@ -568,9 +552,6 @@ class AndroidTVRemoteCard extends HTMLElement {
                   <div class="volume-roller__track"></div>
                   <div class="volume-roller__selection"></div>
                 </div>
-                <div class="ui-button volume-mute-btn">
-                  <ha-icon icon="mdi:volume-high"></ha-icon>
-                </div>
               </div>
             </div>
           </div>
@@ -630,7 +611,6 @@ class AndroidTVRemoteCard extends HTMLElement {
     root.querySelector('.back-button').addEventListener('click', () => { this._haptic('light'); this._sendRemoteCommand('BACK'); });
     root.querySelector('.home-button').addEventListener('click', () => { this._haptic('light'); this._sendRemoteCommand('HOME'); });
     root.querySelector('.volume-button').addEventListener('click', () => { this._haptic('light'); this._toggleVolumePanel(); });
-    root.querySelector('.volume-mute-btn').addEventListener('click', (e) => { e.stopPropagation(); this._haptic('light'); this._toggleMute(); this._resetVolumeClose(); });
 
     this._bindVolumeRoller(root);
 
@@ -787,11 +767,6 @@ class AndroidTVRemoteCard extends HTMLElement {
 
   _applyVolumeValue(value) {
     this._resetVolumeClose();
-    const entityId = this._config.volume_entity ?? this._config.entity;
-    const isMuted = this._hass?.states?.[entityId]?.attributes?.is_volume_muted ?? false;
-    if (!isMuted) {
-      this.shadowRoot.querySelector('.volume-mute-btn ha-icon')?.setAttribute('icon', this._levelIcon(value / 100));
-    }
     this._haptic('selection');
     this._volumeRollerPendingValue = value;
     this._volumeRollerPendingUntil = Date.now() + VOLUME_STATE_SYNC_GRACE_PERIOD;
@@ -855,11 +830,6 @@ class AndroidTVRemoteCard extends HTMLElement {
       if (!panelOpen && volBtnIcon.getAttribute('icon') !== volIcon) {
         volBtnIcon.setAttribute('icon', volIcon);
       }
-      const muteIcon = root.querySelector('.volume-mute-btn ha-icon');
-      if (muteIcon.getAttribute('icon') !== volIcon) {
-        muteIcon.setAttribute('icon', volIcon);
-      }
-
       this._syncVolumeRollerState();
     }
   }
@@ -1009,16 +979,6 @@ class AndroidTVRemoteCard extends HTMLElement {
     this._hass?.callService('media_player', 'volume_set', {
       entity_id: entityId,
       volume_level: Math.round(level * 100) / 100,
-    });
-  }
-
-  _toggleMute() {
-    const entityId = this._config.volume_entity ?? this._config.entity;
-    const entity = this._hass?.states[entityId];
-    if (!entity) return;
-    this._hass.callService('media_player', 'volume_mute', {
-      entity_id: entityId,
-      is_volume_muted: !(entity.attributes.is_volume_muted ?? false),
     });
   }
 
