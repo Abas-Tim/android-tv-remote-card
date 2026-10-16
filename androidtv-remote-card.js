@@ -1,4 +1,5 @@
 const CARD_TAG = 'androidtv-remote-card';
+const VOLUME_ROLLER_ROW_HEIGHT = 32;
 
 function forwardHaptic(element, type) {
   element.dispatchEvent(new CustomEvent('haptic', {
@@ -148,39 +149,66 @@ const STYLES = `
     --remote-button-size: 3rem;
     flex-shrink: 0;
   }
-  .volume-slider {
-    -webkit-appearance: none;
-    appearance: none;
-    writing-mode: vertical-lr;
-    direction: rtl;
-    width: 12px;
+  .volume-roller {
+    position: relative;
     flex: 1;
+    width: 100%;
     min-height: 40px;
-    border-radius: 6px;
+    overflow: hidden;
+    border-radius: 0.5rem;
     outline: none;
-    cursor: pointer;
-    touch-action: auto;
-    background: linear-gradient(
-      to top,
-      var(--remote-text) var(--pct, 50%),
-      var(--remote-ui-bg-highlight) var(--pct, 50%)
-    );
+    cursor: grab;
+    touch-action: none;
+    mask-image: linear-gradient(transparent, black 24%, black 76%, transparent);
   }
-  .volume-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    background: var(--remote-text);
-    cursor: pointer;
+  .volume-roller:focus-visible {
+    outline: 2px solid var(--remote-text);
+    outline-offset: 2px;
   }
-  .volume-slider::-moz-range-thumb {
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    background: var(--remote-text);
-    cursor: pointer;
-    border: none;
+  .volume-roller.dragging,
+  .volume-roller.rolling {
+    cursor: grabbing;
+  }
+  .volume-roller__track {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 100%;
+    transition: transform 120ms ease-out;
+    will-change: transform;
+  }
+  .volume-roller.dragging .volume-roller__track,
+  .volume-roller.rolling .volume-roller__track {
+    transition: none;
+  }
+  .volume-roller__item {
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--remote-text);
+    font-size: 0.9rem;
+    opacity: 0.25;
+  }
+  .volume-roller__item.near {
+    opacity: 0.6;
+  }
+  .volume-roller__item.selected {
+    font-size: 1.1rem;
+    font-weight: 600;
+    opacity: 1;
+  }
+  .volume-roller__selection {
+    position: absolute;
+    top: 50%;
+    left: 0.35rem;
+    right: 0.35rem;
+    height: 32px;
+    border-top: 1px solid var(--remote-text);
+    border-bottom: 1px solid var(--remote-text);
+    transform: translateY(-50%);
+    opacity: 0.35;
+    pointer-events: none;
   }
   .volume-value {
     color: var(--remote-text);
@@ -488,6 +516,12 @@ class AndroidTVRemoteCard extends HTMLElement {
   _disposeRemote() {
     this._remote?.destroy();
     this._remote = null;
+    if (this._volumeRollerFrame) cancelAnimationFrame(this._volumeRollerFrame);
+    this._volumeRollerFrame = null;
+    this._volumeRoller = null;
+    this._volumeRollerDrag = null;
+    this._volumeRollerInteraction = false;
+    this._volumeRollerAnimating = false;
   }
 
   _render() {
@@ -525,7 +559,10 @@ class AndroidTVRemoteCard extends HTMLElement {
               </div>
               <div class="volume-panel">
                 <span class="volume-value">50%</span>
-                <input type="range" class="volume-slider" orient="vertical" min="0" max="${cfg.max_volume ?? 100}" value="50" style="--pct:50%">
+                <div class="volume-roller" role="spinbutton" aria-label="Volume" aria-valuemin="0" aria-valuemax="${cfg.max_volume ?? 100}" aria-valuenow="50" tabindex="0">
+                  <div class="volume-roller__track"></div>
+                  <div class="volume-roller__selection"></div>
+                </div>
                 <div class="ui-button volume-mute-btn">
                   <ha-icon icon="mdi:volume-high"></ha-icon>
                 </div>
@@ -590,25 +627,7 @@ class AndroidTVRemoteCard extends HTMLElement {
     root.querySelector('.volume-button').addEventListener('click', () => { this._haptic('light'); this._toggleVolumePanel(); });
     root.querySelector('.volume-mute-btn').addEventListener('click', (e) => { e.stopPropagation(); this._haptic('light'); this._toggleMute(); this._resetVolumeClose(); });
 
-    const slider = root.querySelector('.volume-slider');
-    const label  = root.querySelector('.volume-value');
-    let lastSentPct = -1;
-    slider.addEventListener('input', () => {
-      const pct = parseInt(slider.value);
-      label.textContent = `${pct}%`;
-      slider.style.setProperty('--pct', `${(pct / slider.max) * 100}%`);
-      this._resetVolumeClose();
-      const entityId = this._config.volume_entity ?? this._config.entity;
-      const isMuted = this._hass?.states[entityId]?.attributes.is_volume_muted ?? false;
-      if (!isMuted) {
-        root.querySelector('.volume-mute-btn ha-icon')?.setAttribute('icon', this._levelIcon(pct / 100));
-      }
-      if (pct !== lastSentPct) {
-        lastSentPct = pct;
-        this._haptic('selection');
-        this._setVolume(pct / 100);
-      }
-    });
+    this._bindVolumeRoller(root);
 
     root.querySelectorAll('.custom-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -626,6 +645,174 @@ class AndroidTVRemoteCard extends HTMLElement {
         }
       });
     });
+  }
+
+  _bindVolumeRoller(root) {
+    const roller = root.querySelector('.volume-roller');
+    const track = root.querySelector('.volume-roller__track');
+    const configuredMax = Number(this._config.max_volume ?? 100);
+    const max = Math.min(100, Math.max(1, Number.isFinite(configuredMax) ? Math.round(configuredMax) : 100));
+    this._volumeRoller = roller;
+    this._volumeRollerMax = max;
+    this._volumeRollerPosition = 0;
+    this._volumeRollerValue = -1;
+    this._volumeRollerInteraction = false;
+    this._volumeRollerAnimating = false;
+    roller.setAttribute('aria-valuemax', String(max));
+
+    for (let value = 0; value <= max; value++) {
+      const item = document.createElement('div');
+      item.className = 'volume-roller__item';
+      item.textContent = String(value);
+      track.appendChild(item);
+    }
+
+    const entityId = this._config.volume_entity ?? this._config.entity;
+    const initialLevel = this._hass?.states?.[entityId]?.attributes?.volume_level ?? 0;
+    this._setVolumeRollerPosition(Math.round(initialLevel * 100) * VOLUME_ROLLER_ROW_HEIGHT, { send: false });
+
+    roller.addEventListener('pointerdown', (event) => {
+      if (!event.isPrimary || (event.button != null && event.button !== 0)) return;
+      event.preventDefault();
+      roller.focus({ preventScroll: true });
+      if (this._volumeRollerFrame) cancelAnimationFrame(this._volumeRollerFrame);
+      this._volumeRollerFrame = null;
+      this._volumeRollerAnimating = false;
+      roller.classList.remove('rolling');
+      this._volumeRollerInteraction = true;
+      this._volumeRollerDrag = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startPosition: this._volumeRollerPosition,
+        lastY: event.clientY,
+        lastTime: performance.now(),
+        velocity: 0,
+      };
+      roller.classList.add('dragging');
+      roller.setPointerCapture(event.pointerId);
+      this._resetVolumeClose();
+    });
+
+    roller.addEventListener('pointermove', (event) => {
+      const drag = this._volumeRollerDrag;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      const now = performance.now();
+      const elapsed = now - drag.lastTime;
+      if (elapsed > 0) {
+        const velocity = -(event.clientY - drag.lastY) / elapsed;
+        drag.velocity = drag.velocity * 0.65 + velocity * 0.35;
+      }
+      drag.lastY = event.clientY;
+      drag.lastTime = now;
+      this._setVolumeRollerPosition(
+        drag.startPosition - (event.clientY - drag.startY),
+      );
+    });
+
+    const finishGesture = (event, allowInertia) => {
+      const drag = this._volumeRollerDrag;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      this._volumeRollerDrag = null;
+      roller.classList.remove('dragging');
+      if (roller.hasPointerCapture(event.pointerId)) roller.releasePointerCapture(event.pointerId);
+      if (allowInertia && Math.abs(drag.velocity) > 0.05) {
+        this._animateVolumeRoller(drag.velocity);
+      } else {
+        const snappedPosition = Math.round(this._volumeRollerPosition / VOLUME_ROLLER_ROW_HEIGHT) * VOLUME_ROLLER_ROW_HEIGHT;
+        this._setVolumeRollerPosition(snappedPosition);
+        this._volumeRollerInteraction = false;
+      }
+    };
+
+    roller.addEventListener('pointerup', (event) => finishGesture(event, true));
+    roller.addEventListener('pointercancel', (event) => finishGesture(event, false));
+    roller.addEventListener('lostpointercapture', (event) => finishGesture(event, false));
+    roller.addEventListener('keydown', (event) => {
+      let nextValue;
+      if (event.key === 'ArrowUp' || event.key === 'ArrowRight') nextValue = this._volumeRollerValue + 1;
+      else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') nextValue = this._volumeRollerValue - 1;
+      else if (event.key === 'PageUp') nextValue = this._volumeRollerValue + 10;
+      else if (event.key === 'PageDown') nextValue = this._volumeRollerValue - 10;
+      else if (event.key === 'Home') nextValue = 0;
+      else if (event.key === 'End') nextValue = max;
+      if (nextValue == null) return;
+      event.preventDefault();
+      this._setVolumeRollerPosition(nextValue * VOLUME_ROLLER_ROW_HEIGHT);
+    });
+  }
+
+  _setVolumeRollerPosition(position, { send = true } = {}) {
+    if (!this._volumeRoller) return 0;
+    const maxPosition = this._volumeRollerMax * VOLUME_ROLLER_ROW_HEIGHT;
+    const clampedPosition = Math.max(0, Math.min(maxPosition, position));
+    const selectedValue = Math.round(clampedPosition / VOLUME_ROLLER_ROW_HEIGHT);
+    this._volumeRollerPosition = clampedPosition;
+    this._volumeRoller.querySelector('.volume-roller__track').style.transform =
+      `translateY(${-clampedPosition - VOLUME_ROLLER_ROW_HEIGHT / 2}px)`;
+
+    if (selectedValue !== this._volumeRollerValue) {
+      const previousValue = this._volumeRollerValue;
+      this._volumeRollerValue = selectedValue;
+      const track = this._volumeRoller.querySelector('.volume-roller__track');
+      if (previousValue >= 0) {
+        track.children[previousValue]?.classList.remove('selected', 'near');
+        for (const offset of [-2, -1, 1, 2]) {
+          track.children[previousValue + offset]?.classList.remove('near');
+        }
+      }
+      track.children[selectedValue]?.classList.add('selected');
+      for (const offset of [-2, -1, 1, 2]) {
+        track.children[selectedValue + offset]?.classList.add('near');
+      }
+
+      this._volumeRoller.setAttribute('aria-valuenow', String(selectedValue));
+      this._volumeRoller.setAttribute('aria-valuetext', selectedValue === 0 ? 'Muted' : `${selectedValue}%`);
+      this.shadowRoot.querySelector('.volume-value').textContent = `${selectedValue}%`;
+      if (send && previousValue >= 0) this._applyVolumeValue(selectedValue);
+    }
+    return clampedPosition;
+  }
+
+  _applyVolumeValue(value) {
+    this._resetVolumeClose();
+    const entityId = this._config.volume_entity ?? this._config.entity;
+    const isMuted = this._hass?.states?.[entityId]?.attributes?.is_volume_muted ?? false;
+    if (!isMuted) {
+      this.shadowRoot.querySelector('.volume-mute-btn ha-icon')?.setAttribute('icon', this._levelIcon(value / 100));
+    }
+    this._haptic('selection');
+    this._setVolume(value / 100);
+  }
+
+  _animateVolumeRoller(velocity) {
+    this._volumeRollerAnimating = true;
+    this._volumeRoller.classList.add('rolling');
+    let lastTime = performance.now();
+
+    const animate = (time) => {
+      const elapsed = Math.min(time - lastTime, 32);
+      lastTime = time;
+      const nextPosition = this._volumeRollerPosition + velocity * elapsed;
+      const position = this._setVolumeRollerPosition(nextPosition);
+      if (position !== nextPosition) velocity = 0;
+      velocity *= Math.pow(0.94, elapsed / 16);
+
+      if (Math.abs(velocity) > 0.02) {
+        this._volumeRollerFrame = requestAnimationFrame(animate);
+        return;
+      }
+
+      this._volumeRollerFrame = null;
+      this._volumeRoller.classList.remove('rolling');
+      this._setVolumeRollerPosition(
+        Math.round(this._volumeRollerPosition / VOLUME_ROLLER_ROW_HEIGHT) * VOLUME_ROLLER_ROW_HEIGHT,
+      );
+      this._volumeRollerAnimating = false;
+      this._volumeRollerInteraction = false;
+    };
+
+    this._volumeRollerFrame = requestAnimationFrame(animate);
   }
 
   _updateState() {
@@ -660,15 +847,12 @@ class AndroidTVRemoteCard extends HTMLElement {
         muteIcon.setAttribute('icon', volIcon);
       }
 
-      const slider = root.querySelector('.volume-slider');
-      if (slider && !slider.matches(':active')) {
+      if (this._volumeRoller && !this._volumeRollerInteraction) {
         const pct = Math.min(
           Math.round((volEntity.attributes.volume_level ?? 0) * 100),
-          parseInt(slider.max),
+          this._volumeRollerMax,
         );
-        slider.value = pct;
-        slider.style.setProperty('--pct', `${(pct / slider.max) * 100}%`);
-        root.querySelector('.volume-value').textContent = `${pct}%`;
+        this._setVolumeRollerPosition(pct * VOLUME_ROLLER_ROW_HEIGHT, { send: false });
       }
     }
   }

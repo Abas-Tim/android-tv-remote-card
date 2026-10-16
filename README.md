@@ -23,7 +23,7 @@ A Home Assistant Lovelace card for controlling Android TV devices, featuring a t
 - **Haptic feedback** — vibrates on mobile when supported
 - **Power** — toggles TV on/off based on current state
 - **Back / Home** — standard navigation buttons
-- **Volume** — mute/unmute toggle, with optional separate entity for soundbars
+- **Volume** — inertial vertical roller from 0 to 100, plus mute/unmute and optional separate entity for soundbars
 - **Custom buttons** — configurable app launchers and key commands
 - **Auto title** — pulls friendly name from the entity, overridable
 
@@ -57,9 +57,9 @@ entity: media_player.living_room_tv
 | `entity` | string | **Yes** | `media_player` entity for power and mute |
 | `remote_entity` | string | No | `remote` entity for navigation. Auto-derived from `entity` if omitted (`media_player.foo` → `remote.foo`) |
 | `name` | string | No | Card title. Defaults to the entity's friendly name |
-| `volume_entity` | string | No | Separate entity for mute (e.g. a soundbar). Falls back to `entity` |
+| `volume_entity` | string | No | Separate entity for volume and mute (e.g. a soundbar). Falls back to `entity` |
 | `hide_title` | boolean | No | Hide the title bar entirely (default `false`) |
-| `max_volume` | number | No | Maximum volume percentage the slider can reach (default `100`) |
+| `max_volume` | number | No | Maximum volume percentage the roller can reach (default `100`) |
 | `height` | number | No | Card height in pixels. Defaults to auto (aspect-ratio based) |
 | `trackpad_long_press` | boolean | No | Enable press-and-hold on the trackpad (default `false`) |
 | `trackpad_long_press_delay` | number | No | Milliseconds to hold before long press starts (default `500`) |
