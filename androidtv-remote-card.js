@@ -1,5 +1,8 @@
 const CARD_TAG = 'androidtv-remote-card';
 const VOLUME_ROLLER_ROW_HEIGHT = 32;
+const VOLUME_PANEL_CLOSE_DELAY = 30000;
+const VOLUME_STATE_SYNC_GRACE_PERIOD = 10000;
+const DEFAULT_VOLUME_PERCENT = 50;
 
 function forwardHaptic(element, type) {
   element.dispatchEvent(new CustomEvent('haptic', {
@@ -517,6 +520,8 @@ class AndroidTVRemoteCard extends HTMLElement {
     this._remote?.destroy();
     this._remote = null;
     if (this._volumeRollerFrame) cancelAnimationFrame(this._volumeRollerFrame);
+    clearTimeout(this._volumeCloseTimer);
+    this._volumeCloseTimer = null;
     this._volumeRollerFrame = null;
     this._volumeRoller = null;
     this._volumeRollerDrag = null;
@@ -650,6 +655,7 @@ class AndroidTVRemoteCard extends HTMLElement {
   _bindVolumeRoller(root) {
     const roller = root.querySelector('.volume-roller');
     const track = root.querySelector('.volume-roller__track');
+    const previousValue = this._volumeRollerValue;
     const configuredMax = Number(this._config.max_volume ?? 100);
     const max = Math.min(100, Math.max(1, Number.isFinite(configuredMax) ? Math.round(configuredMax) : 100));
     this._volumeRoller = roller;
@@ -668,8 +674,13 @@ class AndroidTVRemoteCard extends HTMLElement {
     }
 
     const entityId = this._config.volume_entity ?? this._config.entity;
-    const initialLevel = this._hass?.states?.[entityId]?.attributes?.volume_level ?? 0;
-    this._setVolumeRollerPosition(Math.round(initialLevel * 100) * VOLUME_ROLLER_ROW_HEIGHT, { send: false });
+    const initialLevel = this._hass?.states?.[entityId]?.attributes?.volume_level;
+    const initialValue = initialLevel != null && initialLevel !== '' && Number.isFinite(Number(initialLevel))
+      ? Math.round(Number(initialLevel) * 100)
+      : Number.isInteger(previousValue) && previousValue >= 0
+        ? previousValue
+        : DEFAULT_VOLUME_PERCENT;
+    this._setVolumeRollerPosition(initialValue * VOLUME_ROLLER_ROW_HEIGHT, { send: false });
 
     roller.addEventListener('pointerdown', (event) => {
       if (!event.isPrimary || (event.button != null && event.button !== 0)) return;
@@ -782,6 +793,8 @@ class AndroidTVRemoteCard extends HTMLElement {
       this.shadowRoot.querySelector('.volume-mute-btn ha-icon')?.setAttribute('icon', this._levelIcon(value / 100));
     }
     this._haptic('selection');
+    this._volumeRollerPendingValue = value;
+    this._volumeRollerPendingUntil = Date.now() + VOLUME_STATE_SYNC_GRACE_PERIOD;
     this._setVolume(value / 100);
   }
 
@@ -847,14 +860,33 @@ class AndroidTVRemoteCard extends HTMLElement {
         muteIcon.setAttribute('icon', volIcon);
       }
 
-      if (this._volumeRoller && !this._volumeRollerInteraction) {
-        const pct = Math.min(
-          Math.round((volEntity.attributes.volume_level ?? 0) * 100),
-          this._volumeRollerMax,
-        );
-        this._setVolumeRollerPosition(pct * VOLUME_ROLLER_ROW_HEIGHT, { send: false });
+      this._syncVolumeRollerState();
+    }
+  }
+
+  _syncVolumeRollerState() {
+    if (!this._volumeRoller || this._volumeRollerInteraction) return;
+    const entityId = this._config.volume_entity ?? this._config.entity;
+    const rawLevel = this._hass?.states?.[entityId]?.attributes?.volume_level;
+    if (rawLevel == null || rawLevel === '' || !Number.isFinite(Number(rawLevel))) return;
+
+    const value = Math.max(0, Math.min(
+      this._volumeRollerMax,
+      Math.round(Number(rawLevel) * 100),
+    ));
+    if (this._volumeRollerPendingValue != null) {
+      if (Math.abs(value - this._volumeRollerPendingValue) <= 1) {
+        this._volumeRollerPendingValue = null;
+        this._volumeRollerPendingUntil = 0;
+      } else if (Date.now() < this._volumeRollerPendingUntil) {
+        return;
+      } else {
+        this._volumeRollerPendingValue = null;
+        this._volumeRollerPendingUntil = 0;
       }
     }
+
+    this._setVolumeRollerPosition(value * VOLUME_ROLLER_ROW_HEIGHT, { send: false });
   }
 
   _remoteEntity() {
@@ -923,6 +955,7 @@ class AndroidTVRemoteCard extends HTMLElement {
     const volIcon = this.shadowRoot.querySelector('.volume-button ha-icon');
     const isOpen = panel.classList.contains('open');
     if (!isOpen) {
+      this._syncVolumeRollerState();
       const trackpadH = this.shadowRoot.querySelector('.trackpad').getBoundingClientRect().height;
       panel.style.height = `${trackpadH}px`;
     }
@@ -939,7 +972,14 @@ class AndroidTVRemoteCard extends HTMLElement {
     const entityId = this._config.volume_entity ?? this._config.entity;
     const entity = this._hass?.states[entityId];
     if (entity?.attributes.is_volume_muted) return 'mdi:volume-mute';
-    return this._levelIcon(entity?.attributes.volume_level ?? 0);
+    const level = entity?.attributes.volume_level;
+    if (level != null && level !== '' && Number.isFinite(Number(level))) {
+      return this._levelIcon(Number(level));
+    }
+    const currentValue = this._volumeRollerValue >= 0
+      ? this._volumeRollerValue
+      : DEFAULT_VOLUME_PERCENT;
+    return this._levelIcon(currentValue / 100);
   }
 
   _levelIcon(level) {
@@ -954,10 +994,14 @@ class AndroidTVRemoteCard extends HTMLElement {
   _resetVolumeClose() {
     clearTimeout(this._volumeCloseTimer);
     this._volumeCloseTimer = setTimeout(() => {
+      if (this._volumeRollerInteraction || this._volumeRollerAnimating) {
+        this._resetVolumeClose();
+        return;
+      }
       const root = this.shadowRoot;
       root.querySelector('.volume-panel')?.classList.remove('open');
       root.querySelector('.volume-button ha-icon')?.setAttribute('icon', this._volumeIcon());
-    }, 4000);
+    }, VOLUME_PANEL_CLOSE_DELAY);
   }
 
   _setVolume(level) {
