@@ -23,7 +23,7 @@ A Home Assistant Lovelace card for controlling Android TV devices, featuring a t
 - **Haptic feedback** — vibrates on mobile when supported
 - **Power** — toggles TV on/off based on current state
 - **Back / Home** — standard navigation buttons
-- **Volume** — inertial vertical roller from 0 (silent) to 100, with an optional separate entity for soundbars
+- **Volume** — inertial vertical roller from 0 (silent) to 100 and a mute toggle, with an optional separate entity for soundbars
 - **Custom buttons** — configurable app launchers and key commands
 - **Auto title** — pulls friendly name from the entity, overridable
 
@@ -54,10 +54,10 @@ entity: media_player.living_room_tv
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `entity` | string | **Yes** | `media_player` entity for power and default volume control |
+| `entity` | string | **Yes** | `media_player` entity for power, mute, and default volume control |
 | `remote_entity` | string | No | `remote` entity for navigation. Auto-derived from `entity` if omitted (`media_player.foo` → `remote.foo`) |
 | `name` | string | No | Card title. Defaults to the entity's friendly name |
-| `volume_entity` | string | No | Separate entity for volume control (e.g. a soundbar). Falls back to `entity` |
+| `volume_entity` | string | No | Separate entity for volume and mute (e.g. a soundbar). Falls back to `entity` |
 | `hide_title` | boolean | No | Hide the title bar entirely (default `false`) |
 | `max_volume` | number | No | Maximum volume percentage the roller can reach (default `100`) |
 | `height` | number | No | Card height in pixels. Defaults to auto (aspect-ratio based) |

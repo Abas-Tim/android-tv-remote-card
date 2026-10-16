@@ -149,6 +149,10 @@ const STYLES = `
   .volume-panel.open {
     display: flex;
   }
+  .volume-panel .ui-button {
+    --remote-button-size: 3rem;
+    flex-shrink: 0;
+  }
   .volume-roller {
     position: relative;
     flex: 1;
@@ -552,6 +556,9 @@ class AndroidTVRemoteCard extends HTMLElement {
                   <div class="volume-roller__track"></div>
                   <div class="volume-roller__selection"></div>
                 </div>
+                <div class="ui-button volume-mute-btn">
+                  <ha-icon icon="mdi:volume-high"></ha-icon>
+                </div>
               </div>
             </div>
           </div>
@@ -611,6 +618,12 @@ class AndroidTVRemoteCard extends HTMLElement {
     root.querySelector('.back-button').addEventListener('click', () => { this._haptic('light'); this._sendRemoteCommand('BACK'); });
     root.querySelector('.home-button').addEventListener('click', () => { this._haptic('light'); this._sendRemoteCommand('HOME'); });
     root.querySelector('.volume-button').addEventListener('click', () => { this._haptic('light'); this._toggleVolumePanel(); });
+    root.querySelector('.volume-mute-btn').addEventListener('click', (event) => {
+      event.stopPropagation();
+      this._haptic('light');
+      this._toggleMute();
+      this._resetVolumeClose();
+    });
 
     this._bindVolumeRoller(root);
 
@@ -767,6 +780,11 @@ class AndroidTVRemoteCard extends HTMLElement {
 
   _applyVolumeValue(value) {
     this._resetVolumeClose();
+    const entityId = this._config.volume_entity ?? this._config.entity;
+    const isMuted = this._hass?.states?.[entityId]?.attributes?.is_volume_muted ?? false;
+    if (!isMuted) {
+      this.shadowRoot.querySelector('.volume-mute-btn ha-icon')?.setAttribute('icon', this._levelIcon(value / 100));
+    }
     this._haptic('selection');
     this._volumeRollerPendingValue = value;
     this._volumeRollerPendingUntil = Date.now() + VOLUME_STATE_SYNC_GRACE_PERIOD;
@@ -829,6 +847,10 @@ class AndroidTVRemoteCard extends HTMLElement {
       const volBtnIcon = volBtn.querySelector('ha-icon');
       if (!panelOpen && volBtnIcon.getAttribute('icon') !== volIcon) {
         volBtnIcon.setAttribute('icon', volIcon);
+      }
+      const muteIcon = root.querySelector('.volume-mute-btn ha-icon');
+      if (muteIcon.getAttribute('icon') !== volIcon) {
+        muteIcon.setAttribute('icon', volIcon);
       }
       this._syncVolumeRollerState();
     }
@@ -979,6 +1001,16 @@ class AndroidTVRemoteCard extends HTMLElement {
     this._hass?.callService('media_player', 'volume_set', {
       entity_id: entityId,
       volume_level: Math.round(level * 100) / 100,
+    });
+  }
+
+  _toggleMute() {
+    const entityId = this._config.volume_entity ?? this._config.entity;
+    const entity = this._hass?.states[entityId];
+    if (!entity) return;
+    this._hass.callService('media_player', 'volume_mute', {
+      entity_id: entityId,
+      is_volume_muted: !(entity.attributes.is_volume_muted ?? false),
     });
   }
 
